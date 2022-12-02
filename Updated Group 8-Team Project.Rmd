@@ -1,0 +1,255 @@
+---
+title: "Using R to Understand COVID Death Rates"
+author: "Zachary Pelikan, Xiaomei Hai, Pamela Deane, Clare Huang, Joshua Ippolitov"
+date: "2022-10-09"
+output:
+  pdf_document: default
+  html_document: default
+subtitle: "Assignment 14 - Team Project"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# open libraries section
+library(car)
+library(psych)
+library(ggplot2)
+library(lmtest)
+library(nortest)
+library(readxl)
+```
+
+```{r}
+# set file location
+##taken out temporarily
+
+# read new per poverty rate
+# Source - https://www.indexmundi.com/facts/united-states/quick-facts/florida/percent-of-people-of-all-ages-in-poverty
+
+# read new per Median age
+#source - https://www.flhealthcharts.gov/ChartsReports/rdPage.aspx?rdReport=NonVitalIndRateOnly.TenYrsRpt&cid=300
+
+# read new per hospital density
+#source - https://www.flhealthcharts.gov/ChartsReports/rdPage.aspx?rdReport=NonVitalIndNoGrp.DataViewer&cid=313
+# read new per population density 
+#source - https://worldpopulationreview.com/us-counties/states/fl 
+
+# read new per vaccinated rate
+#source - https://data.democratandchronicle.com/covid-19-vaccine-tracker/florida/12/
+newdata <- read_excel("QMB_project.xlsx")
+
+library(tidyr)
+newdata1 <- newdata %>% drop_na()
+```
+
+
+```{r}
+# extract the data from John's Hopkins GitHub site
+covid19 <- read.csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports/10-08-2022.csv")
+mydata <- covid19
+```
+
+```{r}
+# first, let's subset this worldwide data and just preserve the Florida information
+fldata <- subset(mydata, mydata$Country_Region=="US" & mydata$Province_State=="Florida")
+
+# remove the Unassigned row
+fldata <- subset(fldata, (Admin2 != "Unassigned"))
+
+```
+
+```{r}
+# Add a new variable lethality
+fldata$lethality <- fldata$Deaths / fldata$Confirmed
+
+# update the column name to county 
+colnames(fldata)[2] <- "County"
+
+# save before further calculations
+fldataold <- fldata
+
+```
+
+
+```{r}
+# merge newdata with lethality
+newdata2 <- merge(newdata1, fldata, by = "County",
+      all.x = TRUE)
+
+# delete other column 
+df <- newdata2[ -c(8:20) ]
+colnames(df)[2] <- "poverty"
+colnames(df)[3] <- "mdage"
+colnames(df)[4] <- "hospitalden"
+colnames(df)[5] <- "popden"
+colnames(df)[6] <- "pop"
+colnames(df)[7] <- "vaccined"
+
+```
+
+```{r}
+# review the scatterplot
+pairs.panels(df[,-1], 
+             method = "pearson", # correlation method
+             hist.col = "#00AFBB",
+             density = TRUE,  # show density plots
+             ellipses = TRUE # show correlation ellipses
+)
+```
+
+
+```{r}
+df
+# Build linear model
+lethmod <- lm(lethality ~ poverty + mdage + vaccined, df)
+summary(lethmod)
+###As can be seen by the summary, poverty, median age, and vaccination status can explain 38% of the lethality of COVID-19. Age was the most statistically significant predictor of lethality, followed by vaccination status. Poverty was not a statistically significant predictor of lethality. 
+```
+
+```{r}
+lethmod <- lm(lethality ~ mdage + hospitalden + popden, df)
+summary(lethmod)
+###As can be seen by the summary, median age, hospital density, and population density can explain 27% of the lethality of COVID-19. Age was the most statistically significant predictor of lethality, followed by population density. Hopsital Density was not a statistically significant predictor of lethality. 
+```
+
+
+```{r}
+lethmod <- lm(lethality~ poverty + mdage, df)
+summary(lethmod)
+###As can be seen by the summary, poverty, and median age can explain 30% of the lethality of COVID-19. Age and Poverty both had high statistical significance as predictors of lethality. Unlike in the first model, Poverty is significant, which suggests that vaccination status and level of poverty have multicollinearity.
+```
+
+
+```{r}
+lethmod <- lm(lethality ~ mdage, df)
+summary(lethmod)
+###As can be seen by the summary, median age can explain 18% of the lethality of COVID-19. Age has a high statistical significance as a predictor of lethality.
+```
+
+```{r}
+
+dfold <- df
+
+# check for independence of residuals across observations
+df$obsNum <- 1:67
+df$residuals <- lethmod$residuals
+```
+
+```{r}
+# the x variable really isn't ordered, but we will check anyway
+ggplot(data=df, aes(obsNum, residuals)) +
+  geom_point()
+
+ggplot(data=df, aes(obsNum, residuals)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+```{r}
+# use linear model to check that there isn't a statistical relationship
+indimod <- lm(residuals ~ obsNum, data=df)
+summary(indimod)
+
+# check the correlation 
+cor(df$obsNum, df$residuals)
+```
+
+```{r}
+# Let's check for homoscedasticity
+# let's look at the predicted values
+y_hat <- predict(lethmod, se.fit = TRUE)
+names(y_hat)
+```
+
+```{r}
+# adding the predictions to the mydata data frame
+df$predictions <- y_hat$fit
+
+ggplot(data = df, aes(predictions, residuals)) +
+  geom_point()
+```
+
+```{r}
+# create normalized residuals
+df$residNorm <- (df$residuals - mean(df$residuals)) / sd(df$residuals)
+
+ggplot(data = df, aes(predictions, residNorm)) +
+  geom_point()
+```
+
+```{r}
+# let's compare the actuals versus the predicted values
+ggplot(data = df, aes(predictions, lethality)) +
+  geom_point()
+
+ggplot(data = df, aes(predictions, lethality)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+```{r}
+# here is a statistical test to see if the model has constant variance
+# the null hypothesis is that the variance is constant
+ncvTest(lethmod)
+```
+
+```{r}
+# second test - BP test -
+bptest(lethmod, varformula = NULL, studentize = TRUE, data = statemod$model())
+```
+
+
+```{r}
+df$sqResid <- df$residuals^2
+df$sqPredictions <- df$predictions^2
+residlm <- lm(sqResid ~ predictions + sqPredictions, data = df)
+summary(residlm)
+```
+
+```{r}
+# a diagnostic plot for constant variance is the spread-level plot
+spreadLevelPlot(lethmod)
+
+```
+
+```{r}
+# Test for normality of residual distribution
+ggplot(data = df, aes(x=residuals)) +
+  geom_histogram(bins=30, col="white")
+
+ggplot(data = df, aes(x=residuals)) +
+  geom_histogram(aes(y=..density..), bins=30, col="white") +
+  geom_density(aes(y=..density..), colour="red")
+```
+
+```{r}
+# with a qqplot in ggplot
+ggplot(df, aes(sample=residuals))+
+  stat_qq()
+
+```
+
+```{r}
+# qqplot with base r graphics
+layout(matrix(c(1,1)))
+qqnorm(df$residuals, pch = 1, frame = FALSE)
+qqline(df$residuals, col = "steelblue", lwd = 2)
+
+```
+
+```{r}
+# Anderson Darling Test
+ad.test(df$residuals)
+```
+
+```{r}
+# plots from the model
+# the first line indicates to plot 4 plots in a 2 row, 2 column format
+layout(matrix(c(1,2,3,4),2,2)) # optional 4 graphs/page
+plot(lethmod)
+```
+
